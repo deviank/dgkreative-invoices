@@ -1,0 +1,2 @@
+storage/invoices/*.json
+!storage/invoices/.gitkeep

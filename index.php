@@ -1,5 +1,111 @@
 <?php
 declare(strict_types=1);
+
+const INVOICE_STORAGE = __DIR__ . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'invoices';
+
+function invoiceFile(string $invoiceNumber): string
+{
+    $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '-', trim($invoiceNumber));
+    $safeName = trim((string) $safeName, '.-_');
+
+    if ($safeName === '' || strlen($safeName) > 100) {
+        throw new InvalidArgumentException('A valid invoice number is required.');
+    }
+
+    return INVOICE_STORAGE . DIRECTORY_SEPARATOR . $safeName . '.json';
+}
+
+function respondJson(array $payload, int $status = 200): never
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (isset($_GET['api'])) {
+    if (!is_dir(INVOICE_STORAGE) && !mkdir(INVOICE_STORAGE, 0775, true) && !is_dir(INVOICE_STORAGE)) {
+        respondJson(['ok' => false, 'error' => 'The invoice storage folder could not be created.'], 500);
+    }
+
+    try {
+        $action = (string) $_GET['api'];
+
+        if ($action === 'list' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+            $records = [];
+            $files = glob(INVOICE_STORAGE . DIRECTORY_SEPARATOR . '*.json') ?: [];
+
+            foreach ($files as $file) {
+                $invoice = json_decode((string) file_get_contents($file), true);
+                if (!is_array($invoice) || empty($invoice['invoiceNumber'])) {
+                    continue;
+                }
+
+                $records[] = [
+                    'invoiceNumber' => (string) $invoice['invoiceNumber'],
+                    'clientName' => (string) ($invoice['clientName'] ?? ''),
+                    'billingPeriod' => (string) ($invoice['billingPeriod'] ?? ''),
+                    'savedAt' => (string) ($invoice['savedAt'] ?? ''),
+                ];
+            }
+
+            usort($records, static fn(array $a, array $b): int => strcmp($b['savedAt'], $a['savedAt']));
+            respondJson(['ok' => true, 'records' => $records]);
+        }
+
+        if ($action === 'load' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+            $path = invoiceFile((string) ($_GET['number'] ?? ''));
+            if (!is_file($path)) {
+                respondJson(['ok' => false, 'error' => 'Invoice record not found.'], 404);
+            }
+
+            $invoice = json_decode((string) file_get_contents($path), true);
+            if (!is_array($invoice)) {
+                respondJson(['ok' => false, 'error' => 'The invoice record is damaged.'], 500);
+            }
+
+            respondJson(['ok' => true, 'invoice' => $invoice]);
+        }
+
+        if ($action === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $invoice = json_decode((string) file_get_contents('php://input'), true);
+            if (!is_array($invoice)) {
+                respondJson(['ok' => false, 'error' => 'Invalid invoice data.'], 422);
+            }
+
+            $path = invoiceFile((string) ($invoice['invoiceNumber'] ?? ''));
+            $invoice['savedAt'] = date(DATE_ATOM);
+            $encoded = json_encode(
+                $invoice,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+            );
+
+            if ($encoded === false || file_put_contents($path, $encoded . PHP_EOL, LOCK_EX) === false) {
+                respondJson(['ok' => false, 'error' => 'The invoice record could not be saved.'], 500);
+            }
+
+            respondJson(['ok' => true, 'invoiceNumber' => $invoice['invoiceNumber']]);
+        }
+
+        if ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $request = json_decode((string) file_get_contents('php://input'), true);
+            $path = invoiceFile((string) ($request['invoiceNumber'] ?? ''));
+
+            if (is_file($path) && !unlink($path)) {
+                respondJson(['ok' => false, 'error' => 'The invoice record could not be deleted.'], 500);
+            }
+
+            respondJson(['ok' => true]);
+        }
+
+        respondJson(['ok' => false, 'error' => 'Unsupported invoice action.'], 405);
+    } catch (InvalidArgumentException $error) {
+        respondJson(['ok' => false, 'error' => $error->getMessage()], 422);
+    } catch (Throwable $error) {
+        respondJson(['ok' => false, 'error' => 'Unexpected invoice storage error.'], 500);
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -491,9 +597,12 @@ declare(strict_types=1);
             </details>
 
             <section class="saved-card">
-                <strong>Saved invoices</strong>
+                <strong>Invoice records</strong>
+                <div style="margin-top:3px;color:var(--muted);font-size:12px;">
+                    Stored as protected JSON files in <code>storage/invoices</code>.
+                </div>
                 <div class="saved-row" style="margin-top:10px;">
-                    <select id="savedInvoices" aria-label="Saved invoices">
+                    <select id="savedInvoices" aria-label="Invoice records">
                         <option value="">Select a saved invoice</option>
                     </select>
                     <button class="btn btn-danger btn-small" id="deleteInvoice" type="button">Delete</button>
@@ -596,7 +705,7 @@ declare(strict_types=1);
     <script>
         "use strict";
 
-        const STORAGE_KEY = "dgkreative_invoice_generator_v1";
+        const LEGACY_STORAGE_KEY = "dgkreative_invoice_generator_v1";
         const SETTINGS_KEY = "dgkreative_invoice_settings_v1";
         const formIds = [
             "invoiceNumber", "billingPeriod", "invoiceDate", "dueDate",
@@ -838,7 +947,37 @@ declare(strict_types=1);
             updatePreview();
         }
 
-        function saveCurrentInvoice() {
+        async function requestApi(action, options = {}) {
+            const response = await fetch(`?api=${action}`, {
+                headers: { "Content-Type": "application/json" },
+                ...options
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.ok) {
+                throw new Error(result.error || "Invoice storage request failed.");
+            }
+
+            return result;
+        }
+
+        async function migrateBrowserInvoices() {
+            const legacyInvoices = loadJson(LEGACY_STORAGE_KEY, {});
+            const entries = Object.values(legacyInvoices);
+            if (!entries.length) return;
+
+            for (const invoice of entries) {
+                await requestApi("save", {
+                    method: "POST",
+                    body: JSON.stringify(invoice)
+                });
+            }
+
+            localStorage.removeItem(LEGACY_STORAGE_KEY);
+            setStatus(`${entries.length} browser invoice record(s) moved into the records folder.`);
+        }
+
+        async function saveCurrentInvoice() {
             const number = el("invoiceNumber").value.trim();
             if (!number) {
                 setStatus("Add an invoice number before saving.");
@@ -846,51 +985,72 @@ declare(strict_types=1);
                 return;
             }
 
-            const invoices = loadJson(STORAGE_KEY, {});
-            invoices[number] = collectInvoice();
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(invoices));
+            try {
+                await requestApi("save", {
+                    method: "POST",
+                    body: JSON.stringify(collectInvoice())
+                });
 
-            const settings = {};
-            ["sellerName", "sellerEmail", "sellerAddress", "sellerPhone", "sellerRegistration", "bankDetails"].forEach(id => {
-                settings[id] = el(id).value;
-            });
-            localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+                const settings = {};
+                ["sellerName", "sellerEmail", "sellerAddress", "sellerPhone", "sellerRegistration", "bankDetails"].forEach(id => {
+                    settings[id] = el(id).value;
+                });
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
-            refreshSavedInvoices(number);
-            setStatus(`Saved ${number} in this browser.`);
+                await refreshSavedInvoices(number, false);
+                setStatus(`Saved ${number} in the invoice records folder.`);
+            } catch (error) {
+                setStatus(error.message);
+            }
         }
 
-        function refreshSavedInvoices(selected = "") {
-            const invoices = loadJson(STORAGE_KEY, {});
-            const select = el("savedInvoices");
-            select.replaceChildren(new Option("Select a saved invoice", ""));
+        async function refreshSavedInvoices(selected = "", migrate = true) {
+            try {
+                if (migrate) await migrateBrowserInvoices();
+                const result = await requestApi("list");
+                const select = el("savedInvoices");
+                select.replaceChildren(new Option("Select a saved invoice", ""));
 
-            Object.keys(invoices).sort().reverse().forEach(number => {
-                select.add(new Option(number, number));
-            });
-            select.value = selected;
+                result.records.forEach(record => {
+                    const suffix = record.clientName ? ` — ${record.clientName}` : "";
+                    select.add(new Option(`${record.invoiceNumber}${suffix}`, record.invoiceNumber));
+                });
+                select.value = selected;
+            } catch (error) {
+                setStatus(error.message);
+            }
         }
 
-        function loadSavedInvoice(number) {
+        async function loadSavedInvoice(number) {
             if (!number) return;
-            const invoices = loadJson(STORAGE_KEY, {});
-            if (!invoices[number]) return;
-            populateInvoice(invoices[number]);
-            setStatus(`Loaded ${number}.`);
+
+            try {
+                const result = await requestApi(`load&number=${encodeURIComponent(number)}`);
+                populateInvoice(result.invoice);
+                setStatus(`Loaded ${number} from the invoice records folder.`);
+            } catch (error) {
+                setStatus(error.message);
+            }
         }
 
-        function deleteSavedInvoice() {
+        async function deleteSavedInvoice() {
             const number = el("savedInvoices").value;
             if (!number) {
                 setStatus("Select an invoice to delete.");
                 return;
             }
             if (!window.confirm(`Delete saved invoice ${number}?`)) return;
-            const invoices = loadJson(STORAGE_KEY, {});
-            delete invoices[number];
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(invoices));
-            refreshSavedInvoices();
-            setStatus(`Deleted ${number}.`);
+
+            try {
+                await requestApi("delete", {
+                    method: "POST",
+                    body: JSON.stringify({ invoiceNumber: number })
+                });
+                await refreshSavedInvoices("", false);
+                setStatus(`Deleted ${number} from the invoice records folder.`);
+            } catch (error) {
+                setStatus(error.message);
+            }
         }
 
         formIds.forEach(id => el(id).addEventListener("input", updatePreview));
