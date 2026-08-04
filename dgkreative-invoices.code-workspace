@@ -1,0 +1,14 @@
+{
+    "folders": [
+        {
+            "name": "DGKreative Invoices",
+            "path": "."
+        }
+    ],
+    "settings": {
+        "files.exclude": {
+            "**/.git": true
+        },
+        "php.validate.executablePath": "C:\\wamp64\\bin\\php\\php8.2.13\\php.exe"
+    }
+}
