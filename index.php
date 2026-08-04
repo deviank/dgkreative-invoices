@@ -10,17 +10,17 @@ declare(strict_types=1);
     <title>DGKreative Invoice Generator</title>
     <style>
         :root {
-            --ink: #17202a;
-            --muted: #67727e;
-            --line: #dfe4e8;
+            --ink: #101828;
+            --muted: #667085;
+            --line: #e4e7ec;
             --paper: #ffffff;
-            --canvas: #f2f4f6;
+            --canvas: #eef2f7;
             --panel: #ffffff;
-            --accent: #146c63;
-            --accent-dark: #0c4c46;
-            --accent-soft: #e6f3f1;
+            --accent: #155eef;
+            --accent-dark: #0b3b9e;
+            --accent-soft: #eef4ff;
             --danger: #a63a3a;
-            --radius: 12px;
+            --radius: 16px;
         }
 
         * { box-sizing: border-box; }
@@ -45,8 +45,8 @@ declare(strict_types=1);
             gap: 16px;
             padding: 14px 24px;
             color: white;
-            background: var(--ink);
-            border-bottom: 3px solid var(--accent);
+            background: #0b1220;
+            border-bottom: 1px solid #27364d;
         }
 
         .brand { display: flex; align-items: center; gap: 11px; }
@@ -57,7 +57,7 @@ declare(strict_types=1);
             place-items: center;
             color: white;
             background: var(--accent);
-            border-radius: 9px;
+            border-radius: 11px;
             font-weight: 800;
             letter-spacing: -1px;
         }
@@ -69,7 +69,7 @@ declare(strict_types=1);
             min-height: 38px;
             padding: 8px 14px;
             border: 1px solid transparent;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             font-weight: 700;
             transition: background .15s ease, border-color .15s ease;
@@ -97,6 +97,7 @@ declare(strict_types=1);
             border: 1px solid var(--line);
             border-radius: var(--radius);
             overflow: hidden;
+            box-shadow: 0 4px 14px rgba(16, 24, 40, .04);
         }
         .form-card summary {
             padding: 14px 16px;
@@ -166,19 +167,31 @@ declare(strict_types=1);
         }
 
         .invoice {
+            position: relative;
             width: 100%;
             min-height: 297mm;
             padding: 18mm;
             background: var(--paper);
             border: 1px solid var(--line);
-            box-shadow: 0 8px 28px rgba(23, 32, 42, .09);
+            box-shadow: 0 18px 50px rgba(16, 24, 40, .12);
+            overflow: hidden;
+        }
+        .invoice::before {
+            position: absolute;
+            top: 0;
+            right: 0;
+            left: 0;
+            height: 9px;
+            background: var(--accent);
+            content: "";
         }
         .invoice-head {
             display: flex;
             justify-content: space-between;
+            align-items: flex-start;
             gap: 28px;
-            padding-bottom: 22px;
-            border-bottom: 3px solid var(--accent);
+            padding: 7px 0 25px;
+            border-bottom: 1px solid var(--line);
         }
         .invoice-brand { display: flex; align-items: center; }
         .invoice-logo {
@@ -187,16 +200,41 @@ declare(strict_types=1);
             height: auto;
             margin-bottom: 7px;
         }
-        .invoice-brand-tag { color: var(--muted); font-size: 12px; }
+        .invoice-brand-tag { color: var(--muted); font-size: 11px; letter-spacing: .25px; }
         .invoice-title { text-align: right; }
-        .invoice-title h2 { margin: 0 0 5px; font-size: 28px; letter-spacing: 2px; }
-        .invoice-title strong { color: var(--accent); font-size: 14px; }
+        .invoice-kicker {
+            margin-bottom: 2px;
+            color: var(--accent);
+            font-size: 9px;
+            font-weight: 850;
+            letter-spacing: 1.5px;
+        }
+        .invoice-title h2 { margin: 0 0 4px; font-size: 31px; letter-spacing: 3px; }
+        .invoice-title > strong { color: var(--muted); font-size: 12px; }
+        .header-total {
+            min-width: 175px;
+            margin-top: 14px;
+            padding: 10px 13px;
+            color: white;
+            background: var(--accent);
+            border-radius: 10px;
+            text-align: left;
+        }
+        .header-total span {
+            display: block;
+            margin-bottom: 1px;
+            color: #dbe7ff;
+            font-size: 8px;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+        .header-total strong { font-size: 19px; letter-spacing: -.25px; }
 
         .address-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 35px;
-            padding: 25px 0;
+            padding: 25px 0 20px;
         }
         .eyebrow {
             margin-bottom: 7px;
@@ -205,6 +243,11 @@ declare(strict_types=1);
             font-weight: 850;
             letter-spacing: 1.3px;
         }
+        .address-block {
+            padding-left: 13px;
+            border-left: 3px solid var(--accent-soft);
+        }
+        .address-block:last-child { border-left-color: var(--accent); }
         .address-block strong { display: block; margin-bottom: 3px; font-size: 15px; }
         .address-block div { color: var(--muted); font-size: 12px; white-space: pre-line; }
 
@@ -212,29 +255,31 @@ declare(strict_types=1);
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             margin-bottom: 24px;
-            background: #f6f8f9;
+            background: var(--accent-soft);
             border: 1px solid var(--line);
-            border-radius: 8px;
+            border-radius: 12px;
+            overflow: hidden;
         }
-        .meta-item { padding: 11px 13px; border-right: 1px solid var(--line); }
+        .meta-item { padding: 12px 14px; border-right: 1px solid #d5e2ff; }
         .meta-item:last-child { border-right: 0; }
         .meta-item span { display: block; color: var(--muted); font-size: 10px; font-weight: 750; }
         .meta-item strong { font-size: 12px; }
 
         .invoice-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .invoice-table th {
-            padding: 10px 8px;
+            padding: 11px 10px;
             color: white;
             background: var(--ink);
             font-size: 10px;
-            letter-spacing: .6px;
+            letter-spacing: .85px;
             text-align: left;
+            text-transform: uppercase;
         }
         .invoice-table th:nth-child(n+2), .invoice-table td:nth-child(n+2) { text-align: right; }
         .invoice-table th:nth-child(2) { width: 12%; }
         .invoice-table th:nth-child(3), .invoice-table th:nth-child(4) { width: 17%; }
         .invoice-table td {
-            padding: 13px 8px;
+            padding: 15px 10px;
             border-bottom: 1px solid var(--line);
             vertical-align: top;
             font-size: 12px;
@@ -244,15 +289,21 @@ declare(strict_types=1);
         .totals-area {
             display: grid;
             grid-template-columns: 1fr 250px;
-            gap: 28px;
-            padding-top: 20px;
+            gap: 34px;
+            padding-top: 24px;
         }
         .notes { color: var(--muted); font-size: 11px; white-space: pre-line; }
+        .totals-card {
+            padding: 13px 15px;
+            background: #f8fafc;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+        }
         .total-row { display: flex; justify-content: space-between; gap: 18px; padding: 6px 0; font-size: 12px; }
         .grand-total {
             margin-top: 4px;
-            padding-top: 10px;
-            color: var(--accent-dark);
+            padding-top: 11px;
+            color: var(--accent);
             border-top: 2px solid var(--accent);
             font-size: 17px;
             font-weight: 850;
@@ -263,21 +314,30 @@ declare(strict_types=1);
             grid-template-columns: 1.1fr .9fr;
             gap: 26px;
             margin-top: 32px;
-            padding: 16px;
-            background: var(--accent-soft);
-            border-radius: 8px;
+            padding: 18px;
+            color: white;
+            background: var(--ink);
+            border-left: 6px solid var(--accent);
+            border-radius: 12px;
         }
-        .payment-box strong { display: block; margin-bottom: 5px; font-size: 12px; }
-        .payment-box div { color: #315b57; font-size: 11px; white-space: pre-line; }
+        .payment-box strong { display: block; margin-bottom: 5px; color: white; font-size: 12px; }
+        .payment-box div { color: #cbd5e1; font-size: 11px; white-space: pre-line; }
 
         .invoice-footer {
             margin-top: 38px;
-            padding-top: 12px;
+            padding-top: 14px;
             color: var(--muted);
             border-top: 1px solid var(--line);
             font-size: 10px;
             text-align: center;
         }
+        .invoice-footer strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--accent);
+            font-size: 13px;
+        }
+        .invoice-footer span { display: block; }
 
         .saved-card { padding: 16px; background: white; border: 1px solid var(--line); border-radius: var(--radius); }
         .saved-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
@@ -300,6 +360,7 @@ declare(strict_types=1);
 
         @media print {
             @page { size: A4; margin: 0; }
+            * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             body { background: white; }
             .app-header, .editor { display: none !important; }
             .app-shell { display: block; max-width: none; padding: 0; }
@@ -451,8 +512,13 @@ declare(strict_types=1);
                         </div>
                     </div>
                     <div class="invoice-title">
+                        <div class="invoice-kicker">MONTHLY SERVICE INVOICE</div>
                         <h2>INVOICE</h2>
                         <strong data-preview="invoiceNumber"></strong>
+                        <div class="header-total">
+                            <span>AMOUNT DUE</span>
+                            <strong id="headerTotalPreview"></strong>
+                        </div>
                     </div>
                 </header>
 
@@ -501,7 +567,7 @@ declare(strict_types=1);
                         <div class="eyebrow">NOTES</div>
                         <div class="notes" id="notesPreview"></div>
                     </div>
-                    <div>
+                    <div class="totals-card">
                         <div class="total-row"><span>Subtotal</span><strong id="subtotalPreview"></strong></div>
                         <div class="total-row" id="vatRow"><span>VAT (15%)</span><strong id="vatPreview"></strong></div>
                         <div class="total-row grand-total"><span>Total due</span><span id="totalPreview"></span></div>
@@ -519,7 +585,10 @@ declare(strict_types=1);
                     </div>
                 </section>
 
-                <footer class="invoice-footer" id="invoiceFooter"></footer>
+                <footer class="invoice-footer">
+                    <strong>Thank you for trusting DGKreative.</strong>
+                    <span id="invoiceFooter"></span>
+                </footer>
             </article>
         </section>
     </main>
@@ -736,6 +805,7 @@ declare(strict_types=1);
             el("subtotalPreview").textContent = currency(subtotal);
             el("vatPreview").textContent = currency(vat);
             el("totalPreview").textContent = currency(subtotal + vat);
+            el("headerTotalPreview").textContent = currency(subtotal + vat);
             el("editorTotal").textContent = currency(subtotal + vat);
             el("vatRow").style.display = el("vatEnabled").checked ? "flex" : "none";
 
