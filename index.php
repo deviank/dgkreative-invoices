@@ -287,9 +287,32 @@ if (isset($_GET['api'])) {
             top: 0;
             right: 0;
             left: 0;
+            z-index: 2;
             height: 9px;
             background: var(--accent);
             content: "";
+        }
+        .invoice::after {
+            position: absolute;
+            top: 9px;
+            right: 0;
+            width: 58%;
+            height: 285px;
+            background-image:
+                radial-gradient(circle at 84% 17%, rgba(43, 196, 255, .22) 0 2px, transparent 2.5px),
+                radial-gradient(circle at 84% 17%, transparent 0 48px, rgba(21, 94, 239, .10) 49px 50px, transparent 51px 78px, rgba(43, 196, 255, .08) 79px 80px, transparent 81px),
+                repeating-linear-gradient(118deg, transparent 0 23px, rgba(21, 94, 239, .045) 24px, transparent 25px 48px),
+                radial-gradient(ellipse at 76% 18%, rgba(43, 196, 255, .16), transparent 34%),
+                radial-gradient(ellipse at 62% 36%, rgba(21, 94, 239, .14), transparent 48%);
+            background-size: 16px 16px, 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+            content: "";
+            mask-image: linear-gradient(135deg, transparent 3%, #000 43%, #000 72%, transparent 98%);
+            opacity: .9;
+            pointer-events: none;
+        }
+        .invoice > * {
+            position: relative;
+            z-index: 1;
         }
         .invoice-head {
             display: flex;
@@ -584,7 +607,7 @@ if (isset($_GET['api'])) {
                 <div class="form-content">
                     <div class="field-grid">
                         <label class="wide">Banking details
-                            <textarea id="bankDetails" placeholder="Bank:&#10;Account name: DGKreative&#10;Account number:&#10;Branch code:"></textarea>
+                            <textarea id="bankDetails" placeholder="Account Holder:&#10;Bank Name:&#10;Branch Code:&#10;Account Number:"></textarea>
                         </label>
                         <label class="wide">Payment reference
                             <input id="paymentReference" placeholder="Use invoice number">
@@ -707,6 +730,7 @@ if (isset($_GET['api'])) {
 
         const LEGACY_STORAGE_KEY = "dgkreative_invoice_generator_v1";
         const SETTINGS_KEY = "dgkreative_invoice_settings_v1";
+        const DEFAULT_BANK_DETAILS = "Account Holder: Devian Graham Kapp\nBank Name: TymeBank\nBranch Code: 678910\nAccount Number: 51084432879";
         const formIds = [
             "invoiceNumber", "billingPeriod", "invoiceDate", "dueDate",
             "sellerName", "sellerEmail", "sellerAddress", "sellerPhone", "sellerRegistration",
@@ -750,7 +774,7 @@ if (isset($_GET['api'])) {
         function defaultLines() {
             return [
                 {
-                    description: "Managed website hosting — chlog.co.za\nHosting administration, SSL oversight, backups and uptime checks",
+                    description: "Managed website hosting — chlog.co.za\n35 GB SSD Storage\nWebsite Builder\nSSL Security Certificate\nUnlimited* Traffic\nDatabases\nMailboxes\nAnti-SPAM\nAnti-Virus\nWebmail Access\ncPanel (Control Panel)\nWordPress Toolkit\nHosting administration, backups and uptime checks",
                     quantity: 1,
                     rate: 249
                 },
@@ -783,7 +807,7 @@ if (isset($_GET['api'])) {
             el("sellerAddress").value = savedSettings.sellerAddress || "";
             el("sellerPhone").value = savedSettings.sellerPhone || "";
             el("sellerRegistration").value = savedSettings.sellerRegistration || "";
-            el("bankDetails").value = savedSettings.bankDetails || "";
+            el("bankDetails").value = savedSettings.bankDetails || DEFAULT_BANK_DETAILS;
             el("clientName").value = "CH Logistics";
             el("clientReference").value = "chlog.co.za";
             el("notes").value = "Includes routine maintenance and up to one hour of minor content or technical changes. Additional work is quoted separately. Domain renewal is billed annually when due.";
