@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 const INVOICE_STORAGE = __DIR__ . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'invoices';
 
-function invoiceFile(string $invoiceNumber): string
+function invoiceStorageName(string $invoiceNumber): string
 {
     $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '-', trim($invoiceNumber));
     $safeName = trim((string) $safeName, '.-_');
@@ -12,7 +12,49 @@ function invoiceFile(string $invoiceNumber): string
         throw new InvalidArgumentException('A valid invoice number is required.');
     }
 
-    return INVOICE_STORAGE . DIRECTORY_SEPARATOR . $safeName . '.json';
+    return $safeName;
+}
+
+function invoiceFile(string $invoiceNumber): string
+{
+    return INVOICE_STORAGE . DIRECTORY_SEPARATOR . invoiceStorageName($invoiceNumber) . '.json';
+}
+
+function readInvoiceRecord(string $path): ?array
+{
+    if (!is_file($path)) {
+        return null;
+    }
+
+    $invoice = json_decode((string) file_get_contents($path), true);
+    return is_array($invoice) ? $invoice : null;
+}
+
+/**
+ * Resolve a stored invoice only when the request number matches the record.
+ * Prevents "INV 001" from reading/deleting a different record stored as "INV-001".
+ *
+ * @throws RuntimeException with code 404 when missing/mismatched, 500 when damaged
+ */
+function invoiceRecordForNumber(string $invoiceNumber): array
+{
+    $requestedNumber = trim($invoiceNumber);
+    $path = invoiceFile($requestedNumber);
+
+    if (!is_file($path)) {
+        throw new RuntimeException('Invoice record not found.', 404);
+    }
+
+    $invoice = json_decode((string) file_get_contents($path), true);
+    if (!is_array($invoice)) {
+        throw new RuntimeException('The invoice record is damaged.', 500);
+    }
+
+    if (!isset($invoice['invoiceNumber']) || trim((string) $invoice['invoiceNumber']) !== $requestedNumber) {
+        throw new RuntimeException('Invoice record not found.', 404);
+    }
+
+    return $invoice;
 }
 
 function respondJson(array $payload, int $status = 200): never
@@ -37,8 +79,8 @@ if (isset($_GET['api'])) {
             $files = glob(INVOICE_STORAGE . DIRECTORY_SEPARATOR . '*.json') ?: [];
 
             foreach ($files as $file) {
-                $invoice = json_decode((string) file_get_contents($file), true);
-                if (!is_array($invoice) || empty($invoice['invoiceNumber'])) {
+                $invoice = readInvoiceRecord($file);
+                if ($invoice === null || empty($invoice['invoiceNumber'])) {
                     continue;
                 }
 
@@ -55,14 +97,11 @@ if (isset($_GET['api'])) {
         }
 
         if ($action === 'load' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-            $path = invoiceFile((string) ($_GET['number'] ?? ''));
-            if (!is_file($path)) {
-                respondJson(['ok' => false, 'error' => 'Invoice record not found.'], 404);
-            }
-
-            $invoice = json_decode((string) file_get_contents($path), true);
-            if (!is_array($invoice)) {
-                respondJson(['ok' => false, 'error' => 'The invoice record is damaged.'], 500);
+            try {
+                $invoice = invoiceRecordForNumber((string) ($_GET['number'] ?? ''));
+            } catch (RuntimeException $error) {
+                $status = (int) $error->getCode();
+                respondJson(['ok' => false, 'error' => $error->getMessage()], $status > 0 ? $status : 404);
             }
 
             respondJson(['ok' => true, 'invoice' => $invoice]);
@@ -74,7 +113,23 @@ if (isset($_GET['api'])) {
                 respondJson(['ok' => false, 'error' => 'Invalid invoice data.'], 422);
             }
 
-            $path = invoiceFile((string) ($invoice['invoiceNumber'] ?? ''));
+            $invoiceNumber = trim((string) ($invoice['invoiceNumber'] ?? ''));
+            $path = invoiceFile($invoiceNumber);
+            $existing = readInvoiceRecord($path);
+
+            // Different logical numbers can sanitize to the same filename (e.g. "INV 001" vs "INV-001").
+            // Refuse the write so an existing invoice is never silently replaced.
+            if (
+                $existing !== null
+                && trim((string) ($existing['invoiceNumber'] ?? '')) !== $invoiceNumber
+            ) {
+                respondJson([
+                    'ok' => false,
+                    'error' => 'This invoice number conflicts with an existing record. Use a distinct invoice number.',
+                ], 409);
+            }
+
+            $invoice['invoiceNumber'] = $invoiceNumber;
             $invoice['savedAt'] = date(DATE_ATOM);
             $encoded = json_encode(
                 $invoice,
@@ -85,13 +140,26 @@ if (isset($_GET['api'])) {
                 respondJson(['ok' => false, 'error' => 'The invoice record could not be saved.'], 500);
             }
 
-            respondJson(['ok' => true, 'invoiceNumber' => $invoice['invoiceNumber']]);
+            respondJson(['ok' => true, 'invoiceNumber' => $invoiceNumber]);
         }
 
         if ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $request = json_decode((string) file_get_contents('php://input'), true);
-            $path = invoiceFile((string) ($request['invoiceNumber'] ?? ''));
+            $invoiceNumber = trim((string) (($request ?? [])['invoiceNumber'] ?? ''));
 
+            try {
+                invoiceRecordForNumber($invoiceNumber);
+            } catch (RuntimeException $error) {
+                $status = (int) $error->getCode();
+                if ($status === 404) {
+                    // Already gone under this exact invoice number — treat as success.
+                    respondJson(['ok' => true]);
+                }
+
+                respondJson(['ok' => false, 'error' => $error->getMessage()], $status > 0 ? $status : 500);
+            }
+
+            $path = invoiceFile($invoiceNumber);
             if (is_file($path) && !unlink($path)) {
                 respondJson(['ok' => false, 'error' => 'The invoice record could not be deleted.'], 500);
             }
@@ -990,15 +1058,34 @@ if (isset($_GET['api'])) {
             const entries = Object.values(legacyInvoices);
             if (!entries.length) return;
 
+            // Never overwrite server records during migration — a second browser with
+            // stale localStorage would otherwise clobber newer invoice data.
+            const existing = await requestApi("list");
+            const existingNumbers = new Set(
+                existing.records
+                    .map(record => String(record.invoiceNumber || "").trim())
+                    .filter(Boolean)
+            );
+
+            let migrated = 0;
             for (const invoice of entries) {
+                const number = String(invoice?.invoiceNumber || "").trim();
+                if (!number || existingNumbers.has(number)) {
+                    continue;
+                }
+
                 await requestApi("save", {
                     method: "POST",
                     body: JSON.stringify(invoice)
                 });
+                existingNumbers.add(number);
+                migrated += 1;
             }
 
             localStorage.removeItem(LEGACY_STORAGE_KEY);
-            setStatus(`${entries.length} browser invoice record(s) moved into the records folder.`);
+            if (migrated > 0) {
+                setStatus(`${migrated} browser invoice record(s) moved into the records folder.`);
+            }
         }
 
         async function saveCurrentInvoice() {
