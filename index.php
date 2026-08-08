@@ -725,6 +725,7 @@ if (isset($_GET['api'])) {
         </section>
     </main>
 
+    <script src="assets/invoice-number.js"></script>
     <script>
         "use strict";
 
@@ -739,6 +740,8 @@ if (isset($_GET['api'])) {
         ];
 
         let lines = [];
+        let knownRecords = [];
+        const { nextInvoiceNumber, invoiceNumberExists } = window.DgkInvoiceNumber;
 
         const el = id => document.getElementById(id);
         const currency = value => new Intl.NumberFormat("en-ZA", {
@@ -766,9 +769,8 @@ if (isset($_GET['api'])) {
             }).format(new Date(year, month - 1, 1));
         }
 
-        function defaultInvoiceNumber() {
-            const now = new Date();
-            return `DGK-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-001`;
+        function defaultInvoiceNumber(records = knownRecords) {
+            return nextInvoiceNumber(records);
         }
 
         function defaultLines() {
@@ -1010,9 +1012,23 @@ if (isset($_GET['api'])) {
             }
 
             try {
+                // Re-check the server inventory so Save never silently destroys an existing record.
+                const listed = await requestApi("list");
+                knownRecords = listed.records || [];
+                if (
+                    invoiceNumberExists(knownRecords, number)
+                    && !window.confirm(`Invoice ${number} already exists. Overwrite that saved record?`)
+                ) {
+                    setStatus("Save cancelled — existing invoice was not changed.");
+                    return;
+                }
+
+                const payload = collectInvoice();
+                payload.invoiceNumber = number;
+
                 await requestApi("save", {
                     method: "POST",
-                    body: JSON.stringify(collectInvoice())
+                    body: JSON.stringify(payload)
                 });
 
                 const settings = {};
@@ -1032,10 +1048,11 @@ if (isset($_GET['api'])) {
             try {
                 if (migrate) await migrateBrowserInvoices();
                 const result = await requestApi("list");
+                knownRecords = result.records || [];
                 const select = el("savedInvoices");
                 select.replaceChildren(new Option("Select a saved invoice", ""));
 
-                result.records.forEach(record => {
+                knownRecords.forEach(record => {
                     const suffix = record.clientName ? ` — ${record.clientName}` : "";
                     select.add(new Option(`${record.invoiceNumber}${suffix}`, record.invoiceNumber));
                 });
@@ -1084,7 +1101,14 @@ if (isset($_GET['api'])) {
             renderLineEditors();
             updatePreview();
         });
-        el("newInvoice").addEventListener("click", () => initialiseDefaults(true));
+        el("newInvoice").addEventListener("click", async () => {
+            try {
+                await refreshSavedInvoices(el("savedInvoices").value, false);
+            } catch {
+                // Keep any previously cached records if the refresh fails.
+            }
+            initialiseDefaults(true);
+        });
         el("saveInvoice").addEventListener("click", saveCurrentInvoice);
         el("printInvoice").addEventListener("click", () => {
             updatePreview();
@@ -1093,8 +1117,8 @@ if (isset($_GET['api'])) {
         el("savedInvoices").addEventListener("change", event => loadSavedInvoice(event.target.value));
         el("deleteInvoice").addEventListener("click", deleteSavedInvoice);
 
-        initialiseDefaults(true);
-        refreshSavedInvoices();
+        // Load server records first so the initial invoice number cannot collide with a saved file.
+        refreshSavedInvoices().finally(() => initialiseDefaults(true));
     </script>
 </body>
 </html>
