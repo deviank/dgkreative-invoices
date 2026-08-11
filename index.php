@@ -730,7 +730,6 @@ if (isset($_GET['api'])) {
 
         const LEGACY_STORAGE_KEY = "dgkreative_invoice_generator_v1";
         const SETTINGS_KEY = "dgkreative_invoice_settings_v1";
-        const DEFAULT_BANK_DETAILS = "Account Holder: Devian Graham Kapp\nBank Name: TymeBank\nBranch Code: 678910\nAccount Number: 51084432879";
         const formIds = [
             "invoiceNumber", "billingPeriod", "invoiceDate", "dueDate",
             "sellerName", "sellerEmail", "sellerAddress", "sellerPhone", "sellerRegistration",
@@ -807,7 +806,7 @@ if (isset($_GET['api'])) {
             el("sellerAddress").value = savedSettings.sellerAddress || "";
             el("sellerPhone").value = savedSettings.sellerPhone || "";
             el("sellerRegistration").value = savedSettings.sellerRegistration || "";
-            el("bankDetails").value = savedSettings.bankDetails || DEFAULT_BANK_DETAILS;
+            el("bankDetails").value = savedSettings.bankDetails || "";
             el("clientName").value = "CH Logistics";
             el("clientReference").value = "chlog.co.za";
             el("notes").value = "Includes routine maintenance and up to one hour of minor content or technical changes. Additional work is quoted separately. Domain renewal is billed annually when due.";
