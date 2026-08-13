@@ -2,8 +2,9 @@
 declare(strict_types=1);
 
 const INVOICE_STORAGE = __DIR__ . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'invoices';
+const PDF_STORAGE = __DIR__ . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'pdfs';
 
-function invoiceFile(string $invoiceNumber): string
+function safeInvoiceName(string $invoiceNumber): string
 {
     $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '-', trim($invoiceNumber));
     $safeName = trim((string) $safeName, '.-_');
@@ -12,7 +13,26 @@ function invoiceFile(string $invoiceNumber): string
         throw new InvalidArgumentException('A valid invoice number is required.');
     }
 
-    return INVOICE_STORAGE . DIRECTORY_SEPARATOR . $safeName . '.json';
+    return $safeName;
+}
+
+function invoiceFile(string $invoiceNumber): string
+{
+    return INVOICE_STORAGE . DIRECTORY_SEPARATOR . safeInvoiceName($invoiceNumber) . '.json';
+}
+
+function pdfFile(string $invoiceNumber): string
+{
+    return PDF_STORAGE . DIRECTORY_SEPARATOR . safeInvoiceName($invoiceNumber) . '.pdf';
+}
+
+function ensureStorageFolders(): void
+{
+    foreach ([INVOICE_STORAGE, PDF_STORAGE] as $folder) {
+        if (!is_dir($folder) && !mkdir($folder, 0775, true) && !is_dir($folder)) {
+            throw new RuntimeException('The invoice storage folder could not be created.');
+        }
+    }
 }
 
 function respondJson(array $payload, int $status = 200): never
@@ -25,11 +45,8 @@ function respondJson(array $payload, int $status = 200): never
 }
 
 if (isset($_GET['api'])) {
-    if (!is_dir(INVOICE_STORAGE) && !mkdir(INVOICE_STORAGE, 0775, true) && !is_dir(INVOICE_STORAGE)) {
-        respondJson(['ok' => false, 'error' => 'The invoice storage folder could not be created.'], 500);
-    }
-
     try {
+        ensureStorageFolders();
         $action = (string) $_GET['api'];
 
         if ($action === 'list' && $_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -97,6 +114,40 @@ if (isset($_GET['api'])) {
             }
 
             respondJson(['ok' => true]);
+        }
+
+        if ($action === 'save-pdf' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $request = json_decode((string) file_get_contents('php://input'), true);
+            if (!is_array($request)) {
+                respondJson(['ok' => false, 'error' => 'Invalid PDF upload.'], 422);
+            }
+
+            $safeName = safeInvoiceName((string) ($request['invoiceNumber'] ?? ''));
+            $pdfData = (string) ($request['pdfBase64'] ?? '');
+            if (str_contains($pdfData, ',')) {
+                $pdfData = explode(',', $pdfData, 2)[1];
+            }
+
+            $binary = base64_decode($pdfData, true);
+            if ($binary === false || strlen($binary) < 5 || !str_starts_with($binary, '%PDF')) {
+                respondJson(['ok' => false, 'error' => 'The uploaded file is not a valid PDF.'], 422);
+            }
+
+            if (strlen($binary) > 12 * 1024 * 1024) {
+                respondJson(['ok' => false, 'error' => 'The PDF is too large to save.'], 422);
+            }
+
+            $relativePath = 'storage/pdfs/' . $safeName . '.pdf';
+            $path = pdfFile($safeName);
+            if (file_put_contents($path, $binary, LOCK_EX) === false) {
+                respondJson(['ok' => false, 'error' => 'The PDF could not be saved.'], 500);
+            }
+
+            respondJson([
+                'ok' => true,
+                'invoiceNumber' => $safeName,
+                'path' => $relativePath,
+            ]);
         }
 
         respondJson(['ok' => false, 'error' => 'Unsupported invoice action.'], 405);
@@ -170,7 +221,23 @@ if (isset($_GET['api'])) {
         .brand h1 { margin: 0; font-size: 17px; }
         .brand p { margin: 1px 0 0; color: #aeb7bf; font-size: 12px; }
 
-        .toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .header-status {
+            min-width: 0;
+            max-width: 280px;
+            color: #9fd0ff;
+            font-size: 12px;
+            font-weight: 650;
+            text-align: right;
+        }
+        .header-status.is-error { color: #ffb4b4; }
+        .header-status.is-success { color: #8dffb0; }
         .btn {
             min-height: 38px;
             padding: 8px 14px;
@@ -180,10 +247,17 @@ if (isset($_GET['api'])) {
             font-weight: 700;
             transition: background .15s ease, border-color .15s ease;
         }
+        .btn:disabled { opacity: .7; cursor: wait; }
         .btn-primary { color: white; background: var(--accent); }
         .btn-primary:hover { background: var(--accent-dark); }
         .btn-secondary { color: var(--ink); background: white; border-color: var(--line); }
         .btn-secondary:hover { background: #f5f7f8; }
+        .btn-secondary.is-saved,
+        .btn-primary.is-saved {
+            color: #0f7a3a;
+            background: #e8fff1;
+            border-color: #9ed9b4;
+        }
         .btn-danger { color: var(--danger); background: white; border-color: #e6bcbc; }
         .btn-small { min-height: 32px; padding: 5px 10px; font-size: 13px; }
 
@@ -382,15 +456,17 @@ if (isset($_GET['api'])) {
 
         .meta-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             margin-bottom: 24px;
             background: var(--accent-soft);
             border: 1px solid var(--line);
             border-radius: 12px;
             overflow: hidden;
         }
+        .meta-grid.has-due-date { grid-template-columns: repeat(3, 1fr); }
         .meta-item { padding: 12px 14px; border-right: 1px solid #d5e2ff; }
         .meta-item:last-child { border-right: 0; }
+        .meta-item.is-hidden { display: none; }
         .meta-item span { display: block; color: var(--muted); font-size: 10px; font-weight: 750; }
         .meta-item strong { font-size: 12px; }
 
@@ -471,6 +547,11 @@ if (isset($_GET['api'])) {
         .saved-card { padding: 16px; background: white; border: 1px solid var(--line); border-radius: var(--radius); }
         .saved-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
         .status { min-height: 20px; margin-top: 8px; color: var(--accent-dark); font-size: 12px; }
+        .status.is-error { color: var(--danger); }
+        .saved-card.is-flash {
+            outline: 2px solid var(--accent);
+            box-shadow: 0 0 0 4px var(--accent-soft);
+        }
 
         @media (max-width: 1050px) {
             .app-shell { grid-template-columns: 1fr; }
@@ -514,9 +595,11 @@ if (isset($_GET['api'])) {
             </div>
         </div>
         <div class="toolbar">
+            <div class="header-status" id="headerStatus" role="status" aria-live="polite"></div>
             <button class="btn btn-secondary" type="button" id="newInvoice">New</button>
             <button class="btn btn-secondary" type="button" id="saveInvoice">Save</button>
-            <button class="btn btn-primary" type="button" id="printInvoice">Print / Save PDF</button>
+            <button class="btn btn-primary" type="button" id="savePdf">Save PDF</button>
+            <button class="btn btn-secondary" type="button" id="printInvoice">Print</button>
         </div>
     </header>
 
@@ -535,7 +618,7 @@ if (isset($_GET['api'])) {
                         <label>Invoice date
                             <input id="invoiceDate" type="date">
                         </label>
-                        <label>Due date
+                        <label>Due date <span style="font-weight:600;color:var(--muted);">(optional)</span>
                             <input id="dueDate" type="date">
                         </label>
                     </div>
@@ -622,7 +705,7 @@ if (isset($_GET['api'])) {
             <section class="saved-card">
                 <strong>Invoice records</strong>
                 <div style="margin-top:3px;color:var(--muted);font-size:12px;">
-                    Stored as protected JSON files in <code>storage/invoices</code>.
+                    Data: <code>storage/invoices</code> · PDFs: <code>storage/pdfs</code>
                 </div>
                 <div class="saved-row" style="margin-top:10px;">
                     <select id="savedInvoices" aria-label="Invoice records">
@@ -672,7 +755,7 @@ if (isset($_GET['api'])) {
                         <span>INVOICE DATE</span>
                         <strong id="invoiceDatePreview"></strong>
                     </div>
-                    <div class="meta-item">
+                    <div class="meta-item" id="dueDateMeta">
                         <span>DUE DATE</span>
                         <strong id="dueDatePreview"></strong>
                     </div>
@@ -725,6 +808,7 @@ if (isset($_GET['api'])) {
         </section>
     </main>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <script>
         "use strict";
 
@@ -789,8 +873,6 @@ if (isset($_GET['api'])) {
         function initialiseDefaults(preserveBusiness = true) {
             const savedSettings = preserveBusiness ? loadJson(SETTINGS_KEY, {}) : {};
             const today = new Date();
-            const due = new Date(today);
-            due.setDate(due.getDate() + 7);
 
             formIds.forEach(id => {
                 const field = el(id);
@@ -800,7 +882,7 @@ if (isset($_GET['api'])) {
 
             el("invoiceNumber").value = defaultInvoiceNumber();
             el("invoiceDate").value = dateInputValue(today);
-            el("dueDate").value = dateInputValue(due);
+            el("dueDate").value = "";
             el("billingPeriod").value = dateInputValue(today).slice(0, 7);
             el("sellerName").value = savedSettings.sellerName || "DGKreative";
             el("sellerEmail").value = savedSettings.sellerEmail || "";
@@ -825,12 +907,33 @@ if (isset($_GET['api'])) {
             }
         }
 
-        function setStatus(message) {
-            el("status").textContent = message;
+        function setStatus(message, type = "") {
+            const footerStatus = el("status");
+            const headerStatus = el("headerStatus");
+            footerStatus.textContent = message;
+            headerStatus.textContent = message;
+            footerStatus.classList.toggle("is-error", type === "error");
+            headerStatus.classList.toggle("is-error", type === "error");
+            headerStatus.classList.toggle("is-success", type === "success");
+
             window.clearTimeout(setStatus.timer);
             setStatus.timer = window.setTimeout(() => {
-                el("status").textContent = "";
-            }, 3500);
+                footerStatus.textContent = "";
+                headerStatus.textContent = "";
+                footerStatus.classList.remove("is-error");
+                headerStatus.classList.remove("is-error", "is-success");
+            }, 4500);
+        }
+
+        function flashSavedRecords() {
+            const card = document.querySelector(".saved-card");
+            if (!card) return;
+            card.classList.add("is-flash");
+            card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            window.clearTimeout(flashSavedRecords.timer);
+            flashSavedRecords.timer = window.setTimeout(() => {
+                card.classList.remove("is-flash");
+            }, 1600);
         }
 
         function renderLineEditors() {
@@ -909,8 +1012,11 @@ if (isset($_GET['api'])) {
 
             updateAddressPreview("seller");
             updateAddressPreview("client");
+            const dueDateValue = el("dueDate").value;
             el("invoiceDatePreview").textContent = formatDate(el("invoiceDate").value);
-            el("dueDatePreview").textContent = formatDate(el("dueDate").value);
+            el("dueDatePreview").textContent = formatDate(dueDateValue);
+            el("dueDateMeta").classList.toggle("is-hidden", !dueDateValue);
+            el("dueDateMeta").closest(".meta-grid").classList.toggle("has-due-date", Boolean(dueDateValue));
             el("billingPeriodPreview").textContent = formatMonth(el("billingPeriod").value);
             el("notesPreview").textContent = el("notes").value || "Thank you for your business.";
             el("bankDetailsPreview").textContent = el("bankDetails").value || "Add banking details in the editor.";
@@ -976,7 +1082,13 @@ if (isset($_GET['api'])) {
                 headers: { "Content-Type": "application/json" },
                 ...options
             });
-            const result = await response.json();
+
+            let result;
+            try {
+                result = await response.json();
+            } catch {
+                throw new Error("Invoice storage returned an invalid response.");
+            }
 
             if (!response.ok || !result.ok) {
                 throw new Error(result.error || "Invoice storage request failed.");
@@ -1003,11 +1115,16 @@ if (isset($_GET['api'])) {
 
         async function saveCurrentInvoice() {
             const number = el("invoiceNumber").value.trim();
+            const saveButton = el("saveInvoice");
             if (!number) {
-                setStatus("Add an invoice number before saving.");
+                setStatus("Add an invoice number before saving.", "error");
                 el("invoiceNumber").focus();
                 return;
             }
+
+            const previousLabel = saveButton.textContent;
+            saveButton.disabled = true;
+            saveButton.textContent = "Saving…";
 
             try {
                 await requestApi("save", {
@@ -1022,9 +1139,20 @@ if (isset($_GET['api'])) {
                 localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
                 await refreshSavedInvoices(number, false);
-                setStatus(`Saved ${number} in the invoice records folder.`);
+                setStatus(`Saved ${number}.`, "success");
+                flashSavedRecords();
+                saveButton.classList.add("is-saved");
+                saveButton.textContent = "Saved";
+                window.clearTimeout(saveCurrentInvoice.resetTimer);
+                saveCurrentInvoice.resetTimer = window.setTimeout(() => {
+                    saveButton.classList.remove("is-saved");
+                    saveButton.textContent = previousLabel;
+                }, 2200);
             } catch (error) {
-                setStatus(error.message);
+                setStatus(error.message || "Could not save the invoice.", "error");
+                saveButton.textContent = previousLabel;
+            } finally {
+                saveButton.disabled = false;
             }
         }
 
@@ -1041,7 +1169,7 @@ if (isset($_GET['api'])) {
                 });
                 select.value = selected;
             } catch (error) {
-                setStatus(error.message);
+                setStatus(error.message || "Could not load invoice records.", "error");
             }
         }
 
@@ -1051,16 +1179,16 @@ if (isset($_GET['api'])) {
             try {
                 const result = await requestApi(`load&number=${encodeURIComponent(number)}`);
                 populateInvoice(result.invoice);
-                setStatus(`Loaded ${number} from the invoice records folder.`);
+                setStatus(`Loaded ${number}.`, "success");
             } catch (error) {
-                setStatus(error.message);
+                setStatus(error.message || "Could not load the invoice.", "error");
             }
         }
 
         async function deleteSavedInvoice() {
             const number = el("savedInvoices").value;
             if (!number) {
-                setStatus("Select an invoice to delete.");
+                setStatus("Select an invoice to delete.", "error");
                 return;
             }
             if (!window.confirm(`Delete saved invoice ${number}?`)) return;
@@ -1071,9 +1199,9 @@ if (isset($_GET['api'])) {
                     body: JSON.stringify({ invoiceNumber: number })
                 });
                 await refreshSavedInvoices("", false);
-                setStatus(`Deleted ${number} from the invoice records folder.`);
+                setStatus(`Deleted ${number}.`, "success");
             } catch (error) {
-                setStatus(error.message);
+                setStatus(error.message || "Could not delete the invoice.", "error");
             }
         }
 
@@ -1084,8 +1212,95 @@ if (isset($_GET['api'])) {
             renderLineEditors();
             updatePreview();
         });
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ""));
+                reader.onerror = () => reject(new Error("Could not read the generated PDF."));
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        async function saveInvoicePdf() {
+            const number = el("invoiceNumber").value.trim();
+            const saveButton = el("savePdf");
+            if (!number) {
+                setStatus("Add an invoice number before saving the PDF.", "error");
+                el("invoiceNumber").focus();
+                return;
+            }
+
+            if (typeof html2pdf === "undefined") {
+                setStatus("PDF library failed to load. Check your internet connection.", "error");
+                return;
+            }
+
+            const previousLabel = saveButton.textContent;
+            saveButton.disabled = true;
+            saveButton.textContent = "Saving PDF…";
+            updatePreview();
+
+            try {
+                const filename = `${number}.pdf`;
+                const element = el("invoicePreview");
+                const worker = html2pdf()
+                    .set({
+                        margin: [8, 8, 8, 8],
+                        filename,
+                        image: { type: "jpeg", quality: 0.98 },
+                        html2canvas: {
+                            scale: 2,
+                            useCORS: true,
+                            backgroundColor: "#ffffff",
+                            logging: false
+                        },
+                        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+                        pagebreak: { mode: ["css", "legacy"] }
+                    })
+                    .from(element);
+
+                const pdfBlob = await worker.outputPdf("blob");
+                const pdfBase64 = await blobToBase64(pdfBlob);
+
+                const result = await requestApi("save-pdf", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        invoiceNumber: number,
+                        pdfBase64
+                    })
+                });
+
+                downloadBlob(pdfBlob, filename);
+                setStatus(`PDF saved to ${result.path}`, "success");
+                saveButton.classList.add("is-saved");
+                saveButton.textContent = "PDF saved";
+                window.clearTimeout(saveInvoicePdf.resetTimer);
+                saveInvoicePdf.resetTimer = window.setTimeout(() => {
+                    saveButton.classList.remove("is-saved");
+                    saveButton.textContent = previousLabel;
+                }, 2200);
+            } catch (error) {
+                setStatus(error.message || "Could not save the PDF.", "error");
+                saveButton.textContent = previousLabel;
+            } finally {
+                saveButton.disabled = false;
+            }
+        }
+
         el("newInvoice").addEventListener("click", () => initialiseDefaults(true));
         el("saveInvoice").addEventListener("click", saveCurrentInvoice);
+        el("savePdf").addEventListener("click", saveInvoicePdf);
         el("printInvoice").addEventListener("click", () => {
             updatePreview();
             window.print();

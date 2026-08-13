@@ -1,2 +1,4 @@
 storage/invoices/*.json
 !storage/invoices/.gitkeep
+storage/pdfs/*.pdf
+!storage/pdfs/.gitkeep
