@@ -1,0 +1,17 @@
+{
+    "name": "DGKreative Invoices",
+    "install": "sudo apt-get update && sudo apt-get install -y --no-install-recommends php-cli",
+    "terminals": [
+        {
+            "name": "php-server",
+            "command": "php -S 0.0.0.0:8080 -t .",
+            "description": "PHP built-in development server for the DGKreative invoice generator. Serves the app and its ?api= JSON endpoints at http://localhost:8080."
+        }
+    ],
+    "ports": [
+        {
+            "name": "web",
+            "port": 8080
+        }
+    ]
+}
