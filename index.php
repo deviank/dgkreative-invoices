@@ -26,6 +26,31 @@ function pdfFile(string $invoiceNumber): string
     return PDF_STORAGE . DIRECTORY_SEPARATOR . safeInvoiceName($invoiceNumber) . '.pdf';
 }
 
+/**
+ * Atomically replace a storage file so a failed/interrupted write cannot
+ * truncate or destroy an existing PDF (or other binary) on disk.
+ */
+function writeStorageFile(string $path, string $contents): bool
+{
+    $directory = dirname($path);
+    if (!is_dir($directory)) {
+        return false;
+    }
+
+    $tempPath = $directory . DIRECTORY_SEPARATOR . '.tmp-' . bin2hex(random_bytes(8));
+
+    if (@file_put_contents($tempPath, $contents, LOCK_EX) === false) {
+        return false;
+    }
+
+    if (!rename($tempPath, $path)) {
+        @unlink($tempPath);
+        return false;
+    }
+
+    return true;
+}
+
 function ensureStorageFolders(): void
 {
     foreach ([INVOICE_STORAGE, PDF_STORAGE] as $folder) {
@@ -107,7 +132,15 @@ if (isset($_GET['api'])) {
 
         if ($action === 'delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $request = json_decode((string) file_get_contents('php://input'), true);
-            $path = invoiceFile((string) ($request['invoiceNumber'] ?? ''));
+            $invoiceNumber = (string) ($request['invoiceNumber'] ?? '');
+            $path = invoiceFile($invoiceNumber);
+            $pdfPath = pdfFile($invoiceNumber);
+
+            // Always clear the PDF companion file as well as the JSON record so
+            // "Delete" cannot leave customer billing PDFs behind on disk.
+            if (is_file($pdfPath) && !unlink($pdfPath)) {
+                respondJson(['ok' => false, 'error' => 'The invoice PDF could not be deleted.'], 500);
+            }
 
             if (is_file($path) && !unlink($path)) {
                 respondJson(['ok' => false, 'error' => 'The invoice record could not be deleted.'], 500);
@@ -128,6 +161,11 @@ if (isset($_GET['api'])) {
                 $pdfData = explode(',', $pdfData, 2)[1];
             }
 
+            // Reject oversized payloads before decoding to avoid exhausting memory.
+            if (strlen($pdfData) > 16 * 1024 * 1024) {
+                respondJson(['ok' => false, 'error' => 'The PDF is too large to save.'], 422);
+            }
+
             $binary = base64_decode($pdfData, true);
             if ($binary === false || strlen($binary) < 5 || !str_starts_with($binary, '%PDF')) {
                 respondJson(['ok' => false, 'error' => 'The uploaded file is not a valid PDF.'], 422);
@@ -139,7 +177,7 @@ if (isset($_GET['api'])) {
 
             $relativePath = 'storage/pdfs/' . $safeName . '.pdf';
             $path = pdfFile($safeName);
-            if (file_put_contents($path, $binary, LOCK_EX) === false) {
+            if (!writeStorageFile($path, $binary)) {
                 respondJson(['ok' => false, 'error' => 'The PDF could not be saved.'], 500);
             }
 
