@@ -35,6 +35,31 @@ function ensureStorageFolders(): void
     }
 }
 
+/**
+ * Atomically replace an invoice file so a failed or interrupted write cannot
+ * truncate/destroy an existing record (write temp → rename).
+ */
+function writeInvoiceRecord(string $path, string $contents): bool
+{
+    $directory = dirname($path);
+    if (!is_dir($directory)) {
+        return false;
+    }
+
+    $tempPath = $directory . DIRECTORY_SEPARATOR . '.tmp-' . bin2hex(random_bytes(8)) . '.json';
+
+    if (@file_put_contents($tempPath, $contents, LOCK_EX) === false) {
+        return false;
+    }
+
+    if (!rename($tempPath, $path)) {
+        @unlink($tempPath);
+        return false;
+    }
+
+    return true;
+}
+
 function respondJson(array $payload, int $status = 200): never
 {
     http_response_code($status);
@@ -98,7 +123,7 @@ if (isset($_GET['api'])) {
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
             );
 
-            if ($encoded === false || file_put_contents($path, $encoded . PHP_EOL, LOCK_EX) === false) {
+            if ($encoded === false || !writeInvoiceRecord($path, $encoded . PHP_EOL)) {
                 respondJson(['ok' => false, 'error' => 'The invoice record could not be saved.'], 500);
             }
 
