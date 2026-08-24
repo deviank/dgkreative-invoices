@@ -26,8 +26,51 @@ function pdfFile(string $invoiceNumber): string
     return PDF_STORAGE . DIRECTORY_SEPARATOR . safeInvoiceName($invoiceNumber) . '.pdf';
 }
 
+/**
+ * Apache deny rules for the storage tree. Recreated when missing so a wiped
+ * storage/ directory cannot come back as a public file dump of invoices/PDFs.
+ */
+function storageHtaccessContents(): string
+{
+    return <<<'HTACCESS'
+Require all denied
+
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
+
+HTACCESS;
+}
+
+function ensureStorageProtection(string $storageRoot): void
+{
+    $htaccessPath = $storageRoot . DIRECTORY_SEPARATOR . '.htaccess';
+    $expected = storageHtaccessContents();
+
+    if (is_file($htaccessPath)) {
+        $existing = (string) file_get_contents($htaccessPath);
+        if (str_contains($existing, 'Require all denied') || str_contains($existing, 'Deny from all')) {
+            return;
+        }
+    }
+
+    if (file_put_contents($htaccessPath, $expected, LOCK_EX) === false) {
+        throw new RuntimeException('The invoice storage protection file could not be created.');
+    }
+}
+
 function ensureStorageFolders(): void
 {
+    $storageRoot = dirname(INVOICE_STORAGE);
+
+    if (!is_dir($storageRoot) && !mkdir($storageRoot, 0775, true) && !is_dir($storageRoot)) {
+        throw new RuntimeException('The invoice storage folder could not be created.');
+    }
+
+    // Fail closed: never expose JSON/PDF records via direct HTTP after a recreate.
+    ensureStorageProtection($storageRoot);
+
     foreach ([INVOICE_STORAGE, PDF_STORAGE] as $folder) {
         if (!is_dir($folder) && !mkdir($folder, 0775, true) && !is_dir($folder)) {
             throw new RuntimeException('The invoice storage folder could not be created.');
