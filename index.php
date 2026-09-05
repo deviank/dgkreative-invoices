@@ -1102,15 +1102,26 @@ if (isset($_GET['api'])) {
             const entries = Object.values(legacyInvoices);
             if (!entries.length) return;
 
+            let migrated = 0;
             for (const invoice of entries) {
-                await requestApi("save", {
-                    method: "POST",
-                    body: JSON.stringify(invoice)
-                });
+                try {
+                    await requestApi("save", {
+                        method: "POST",
+                        body: JSON.stringify(invoice)
+                    });
+                    migrated += 1;
+                } catch {
+                    // Skip unsavable legacy entries so one poison record cannot
+                    // abort migration (and block loading server invoices) forever.
+                }
             }
 
+            // Always clear legacy storage after an attempt — leaving a rejected
+            // entry behind would retry on every page load.
             localStorage.removeItem(LEGACY_STORAGE_KEY);
-            setStatus(`${entries.length} browser invoice record(s) moved into the records folder.`);
+            if (migrated > 0) {
+                setStatus(`${migrated} browser invoice record(s) moved into the records folder.`);
+            }
         }
 
         async function saveCurrentInvoice() {
@@ -1158,7 +1169,17 @@ if (isset($_GET['api'])) {
 
         async function refreshSavedInvoices(selected = "", migrate = true) {
             try {
-                if (migrate) await migrateBrowserInvoices();
+                if (migrate) {
+                    try {
+                        await migrateBrowserInvoices();
+                    } catch (migrateError) {
+                        // Never let migration failure hide existing server records.
+                        setStatus(
+                            migrateError.message || "Browser invoice migration failed.",
+                            "error"
+                        );
+                    }
+                }
                 const result = await requestApi("list");
                 const select = el("savedInvoices");
                 select.replaceChildren(new Option("Select a saved invoice", ""));
