@@ -122,7 +122,27 @@ if (isset($_GET['api'])) {
                 respondJson(['ok' => false, 'error' => 'Invalid PDF upload.'], 422);
             }
 
-            $safeName = safeInvoiceName((string) ($request['invoiceNumber'] ?? ''));
+            $invoiceNumber = trim((string) ($request['invoiceNumber'] ?? ''));
+            $safeName = safeInvoiceName($invoiceNumber);
+
+            // Distinct logical numbers can sanitize to the same PDF filename (e.g. "INV 001"
+            // vs "INV-001"). Refuse the write when that path already belongs to a different
+            // saved invoice so Save PDF cannot silently destroy its companion PDF.
+            $jsonPath = invoiceFile($invoiceNumber);
+            if (is_file($jsonPath)) {
+                $existing = json_decode((string) file_get_contents($jsonPath), true);
+                if (
+                    is_array($existing)
+                    && isset($existing['invoiceNumber'])
+                    && trim((string) $existing['invoiceNumber']) !== $invoiceNumber
+                ) {
+                    respondJson([
+                        'ok' => false,
+                        'error' => 'This invoice number conflicts with an existing record. Use a distinct invoice number.',
+                    ], 409);
+                }
+            }
+
             $pdfData = (string) ($request['pdfBase64'] ?? '');
             if (str_contains($pdfData, ',')) {
                 $pdfData = explode(',', $pdfData, 2)[1];
@@ -138,14 +158,14 @@ if (isset($_GET['api'])) {
             }
 
             $relativePath = 'storage/pdfs/' . $safeName . '.pdf';
-            $path = pdfFile($safeName);
+            $path = pdfFile($invoiceNumber);
             if (file_put_contents($path, $binary, LOCK_EX) === false) {
                 respondJson(['ok' => false, 'error' => 'The PDF could not be saved.'], 500);
             }
 
             respondJson([
                 'ok' => true,
-                'invoiceNumber' => $safeName,
+                'invoiceNumber' => $invoiceNumber,
                 'path' => $relativePath,
             ]);
         }
