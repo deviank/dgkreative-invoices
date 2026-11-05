@@ -1232,6 +1232,26 @@ if (isset($_GET['api'])) {
             window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
 
+        /**
+         * Freeze the on-screen invoice into an off-document clone before the async
+         * html2pdf render. html2canvas reads the live DOM when outputPdf runs, so
+         * New/Load/edits during generation would otherwise store the wrong PDF
+         * under the invoice number captured at click time.
+         */
+        function snapshotInvoicePreview(source) {
+            const clone = source.cloneNode(true);
+            clone.id = "invoicePreviewSnapshot";
+            clone.setAttribute("aria-hidden", "true");
+            clone.style.position = "fixed";
+            clone.style.left = "-10000px";
+            clone.style.top = "0";
+            clone.style.width = `${source.offsetWidth || 800}px`;
+            clone.style.margin = "0";
+            clone.style.pointerEvents = "none";
+            document.body.appendChild(clone);
+            return clone;
+        }
+
         async function saveInvoicePdf() {
             const number = el("invoiceNumber").value.trim();
             const saveButton = el("savePdf");
@@ -1247,13 +1267,21 @@ if (isset($_GET['api'])) {
             }
 
             const previousLabel = saveButton.textContent;
-            saveButton.disabled = true;
+            const lockedControls = [
+                "newInvoice", "saveInvoice", "savePdf", "printInvoice",
+                "deleteInvoice", "savedInvoices", "addLine"
+            ].map(el);
+            const previousDisabled = lockedControls.map(node => node.disabled);
+            lockedControls.forEach(node => {
+                node.disabled = true;
+            });
             saveButton.textContent = "Saving PDF…";
             updatePreview();
 
+            let snapshot = null;
             try {
                 const filename = `${number}.pdf`;
-                const element = el("invoicePreview");
+                snapshot = snapshotInvoicePreview(el("invoicePreview"));
                 const worker = html2pdf()
                     .set({
                         margin: [8, 8, 8, 8],
@@ -1268,7 +1296,7 @@ if (isset($_GET['api'])) {
                         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
                         pagebreak: { mode: ["css", "legacy"] }
                     })
-                    .from(element);
+                    .from(snapshot);
 
                 const pdfBlob = await worker.outputPdf("blob");
                 const pdfBase64 = await blobToBase64(pdfBlob);
@@ -1294,7 +1322,12 @@ if (isset($_GET['api'])) {
                 setStatus(error.message || "Could not save the PDF.", "error");
                 saveButton.textContent = previousLabel;
             } finally {
-                saveButton.disabled = false;
+                if (snapshot && snapshot.parentNode) {
+                    snapshot.remove();
+                }
+                lockedControls.forEach((node, index) => {
+                    node.disabled = previousDisabled[index];
+                });
             }
         }
 
